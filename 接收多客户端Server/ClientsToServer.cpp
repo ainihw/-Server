@@ -41,7 +41,10 @@ struct ClientData
 	MyWrap		stWrap;			//客户端的数据包
 	SOCKET		hSocketClient;	//用来和指定客户端传输数据的套接字句柄
 	HANDLE		hThread;		//用来接收包的线程句柄
+	HANDLE		 hmutex;		//定义互斥对象句柄（用来同步收到来自客户端的包）
+
 	_Show		stShow;			//显示辅助（）线程参数
+
 
 	HWND		hScreenWindow;	//屏幕窗口句柄
 	HANDLE		hScreenThread;	//屏幕显示线程句柄
@@ -54,7 +57,7 @@ struct ClientData
 
 
 ClientData* pHandClient = NULL;		//客户端数据链表头指针
-
+HANDLE		 hmutex1;		//定义全局互斥对象句柄（用来同步收到发送到客户端的包）
 
 
 
@@ -62,8 +65,8 @@ HWND hWinMain;					//主窗口句柄
 SOCKET hSocketWait;				//用于等待客户端连接的套接字句柄		
 
 
-HANDLE hmutex;					//定义全局互斥对象句柄（用来同步收到来自客户端的包）
-HANDLE hmutex1;					//定义全局互斥对象句柄（用来同步收到发送到客户端的包）
+
+
 
 
 BOOL _stdcall _CheckClient();
@@ -138,7 +141,7 @@ BOOL CALLBACK _DialogMain(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_INITDIALOG:
 		hWinMain = hWnd;
-		hmutex = CreateMutex(NULL, false, NULL);//创建互斥对象并返回其句柄
+		
 		hmutex1 = CreateMutex(NULL, false, NULL);//创建互斥对象并返回其句柄
 		hMenu = LoadMenu(GetModuleHandle(NULL), MAKEINTRESOURCE(IDR_MENU1));
 		_InitSocket();					//初始化网络
@@ -305,19 +308,27 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 		pClient = pClient->Next;
 	}
 
+	pClient->hmutex = CreateMutex(NULL, false, NULL);		//创建互斥对象并返回其句柄（同步接收来自客户端的包）
 
+
+
+
+	
 
 	while (1)
 	{
 
 		len = 0;
-		WaitForSingleObject(hmutex, INFINITE);		//请求互斥对象
+		WaitForSingleObject(pClient->hmutex, INFINITE);		//请求互斥对象
 
 
 		//接收来自客户端的数据(循环接收)
+	
+
 		memset(szBuffer, 0, sizeof(szBuffer));
 		while (1)
 		{
+
 			len = recv(pClient->hSocketClient, (char*)(szBuffer + len), 8 - len, 0);
 			if (len <= 0)							//recv错误
 			{
@@ -367,9 +378,9 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 				break;
 		}
 
-		ReleaseMutex(hmutex);						//释放互斥对象
-		ReleaseMutex(hmutex);						//释放互斥对象
-		WaitForSingleObject(hmutex, INFINITE);		//请求互斥对象
+		ReleaseMutex(pClient->hmutex);						//释放互斥对象
+		ReleaseMutex(pClient->hmutex);						//释放互斥对象
+		WaitForSingleObject(pClient->hmutex, INFINITE);		//请求互斥对象
 		delete[] pClient->stWrap.lpBuffer;			//释放内存
 
 
@@ -524,7 +535,7 @@ BOOL _stdcall _ShowScreen(_Show* lpScreen)
 	stSendWrap.dwType = GET_CLIENT_SCREEN;
 	stSendWrap.dwLength = 0;
 	WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
-	int nnn = send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);
+	send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);
 	ReleaseMutex(hmutex1);						//释放互斥对象1
 
 	hDeskDc = GetDC(lpScreen->hWnd);
@@ -541,7 +552,7 @@ BOOL _stdcall _ShowScreen(_Show* lpScreen)
 		{
 
 
-			WaitForSingleObject(hmutex, INFINITE);//请求互斥对象
+			WaitForSingleObject(pClient->hmutex, INFINITE);//请求互斥对象
 
 			nWidth = ((DWORD*)pClient->stWrap.lpBuffer)[0];
 			nHeight = ((DWORD*)pClient->stWrap.lpBuffer)[1];
@@ -561,7 +572,7 @@ BOOL _stdcall _ShowScreen(_Show* lpScreen)
 				SRCCOPY			//拷贝模式
 			);
 			DeleteObject(hMyBitMap);
-			ReleaseMutex(hmutex);//释放互斥对象句柄
+			ReleaseMutex(pClient->hmutex);//释放互斥对象句柄
 
 		}
 
@@ -591,10 +602,10 @@ BOOL _stdcall _ShowCmd(_Show* lpScreen)
 
 		if (pClient->stWrap.dwType == 10001)			//显示cmd
 		{
-			WaitForSingleObject(hmutex, INFINITE);		//请求互斥对象
+			WaitForSingleObject(pClient->hmutex, INFINITE);		//请求互斥对象
 			SendMessage(GetDlgItem(pClient->hCmdWindow, IDC_EDIT1), EM_SETSEL, -2, -1);					//最加写cmd数据
 			SendMessage(GetDlgItem(pClient->hCmdWindow, IDC_EDIT1), EM_REPLACESEL, true, (DWORD)pClient->stWrap.lpBuffer);
-			ReleaseMutex(hmutex);						//释放互斥对象句柄
+			ReleaseMutex(pClient->hmutex);						//释放互斥对象句柄
 		}
 
 	}
