@@ -8,6 +8,7 @@
 
 //宏定义
 
+
 //cmd包
 #define TO_CLIENT_CMD		10001
 #define GET_CLIENT_CMD		10002
@@ -19,6 +20,8 @@
 
 //键盘包
 #define TO_CLIENT_KEY		30001
+
+
 
 
 //自定义消息
